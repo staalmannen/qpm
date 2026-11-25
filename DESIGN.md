@@ -14,9 +14,13 @@ Over time, qpm should also provide a substantial Node.js compatibility layer
 so that a much larger portion of the npm package ecosystem can actually run
 on alternative JavaScript engines.
 
-APE is a useful first portability target because it provides a deliberately
-small POSIX environment. A successful APE build is a strong portability
-discipline, but other POSIX systems must still be tested.
+APE is a useful portability *benchmark*: a successful build against a small
+POSIX environment is strong evidence of portability. It is not a product
+target that should drive implementation-specific APIs. Prefer ordinary
+standard C and POSIX interfaces, and widely available libraries (e.g. libcurl
+for HTTP, zlib for gzip). Alternatives such as a minimal portable event/HTTP
+stack are acceptable when they remain standard-C/POSIX and do not leak into
+the JavaScript core. Other POSIX systems must still be tested.
 
 ## 2. Design principles
 
@@ -337,7 +341,10 @@ compatibility empirically with a test corpus of real packages.
 - [x] package.json dependency normalization
 - [x] Registry package-name URL encoding
 - [x] Packument version selection
-- [ ] Expand semver behavior and conformance tests
+- [x] Dependency graph resolver (host-supplied fetchPackument)
+- [x] package-lock.json read helpers + v3 lockfile generation
+- [x] Expand semver behavior and conformance tests (fixture suite; more to come)
+- [x] Host capability interface + Node.js development adapter
 
 ### Phase 1 — native foundation and registry client
 
@@ -351,14 +358,14 @@ compatibility empirically with a test corpus of real packages.
 
 ### Phase 2 — npm-compatible installation foundation
 
-- [ ] Implement npm-compatible `package-lock.json` reading/writing
+- [x] Implement npm-compatible `package-lock.json` reading/writing (v3 emit; v1/v2/v3 read)
 - [ ] Add lockfile fixtures from multiple npm lockfile versions
-- [ ] Implement npm-compatible semver behavior
-- [ ] Dependency graph resolver and peer dependency handling
-- [ ] Tarball download and integrity verification
-- [ ] Safe tar/gzip extraction
-- [ ] npm-compatible `node_modules` placement
-- [ ] Atomic installation and lockfile updates
+- [ ] Implement npm-compatible semver behavior (full)
+- [x] Dependency graph resolver and basic peer/optional handling hooks
+- [x] Tarball download and integrity verification (SRI + legacy shasum)
+- [x] Safe tar/gzip extraction (host.extractTarGz; Node ustar impl, path-traversal checks)
+- [x] Flat npm-compatible `node_modules` placement (scoped packages; nested later)
+- [x] Install + lockfile write path (`installProject` / `installResolved`)
 
 ### Phase 3 — package-manager workflows
 
