@@ -230,6 +230,82 @@ try {
   equal(safeTarPath("/etc/passwd"), null, "reject absolute tar path");
   equal(safeTarPath("foo/../../etc"), null, "reject nested traversal");
 
+  // ========== placement (nested on version conflict) ==========
+  const { planPlacement, nameToSegments, joinRel } = await import("../src/placement.js");
+  equal(joinRel(...nameToSegments("left-pad")), "node_modules/left-pad", "nameToSegments unscoped");
+  equal(joinRel(...nameToSegments("@scope/pkg")), "node_modules/@scope/pkg", "nameToSegments scoped");
+
+  // Synthetic resolve result: root -> A@1, B@1; A needs shared@1; B needs shared@2
+  const placementResult = {
+    rootId: "app@1.0.0",
+    packages: [
+      { id: "parent-a@1.0.0", name: "parent-a", version: "1.0.0", range: "1.0.0", section: "dependencies", tarball: null, integrity: null, shasum: null, dependencies: { shared: "1.0.0" } },
+      { id: "parent-b@1.0.0", name: "parent-b", version: "1.0.0", range: "1.0.0", section: "dependencies", tarball: null, integrity: null, shasum: null, dependencies: { shared: "2.0.0" } },
+      { id: "shared@1.0.0", name: "shared", version: "1.0.0", range: "1.0.0", section: "dependencies", tarball: null, integrity: null, shasum: null, dependencies: {} },
+      { id: "shared@2.0.0", name: "shared", version: "2.0.0", range: "2.0.0", section: "dependencies", tarball: null, integrity: null, shasum: null, dependencies: {} }
+    ],
+    byId: new Map(),
+    edges: new Map([
+      ["app@1.0.0", ["parent-a@1.0.0", "parent-b@1.0.0"]],
+      ["parent-a@1.0.0", ["shared@1.0.0"]],
+      ["parent-b@1.0.0", ["shared@2.0.0"]]
+    ])
+  };
+  const places = planPlacement(placementResult);
+  const paths = places.map((p) => p.relPath).sort();
+  truth(paths.includes("node_modules/parent-a"), "place parent-a at root");
+  truth(paths.includes("node_modules/parent-b"), "place parent-b at root");
+  truth(paths.includes("node_modules/shared"), "hoist one shared version");
+  const nestedShared = places.filter((p) => p.name === "shared" && p.nested);
+  truth(nestedShared.length >= 1, "nest conflicting shared version");
+  truth(nestedShared.some((p) => p.relPath.includes("node_modules/shared")), "nested path contains node_modules/shared");
+
+  // ========== lockfile fixtures ==========
+  const { readFileSync } = await import("node:fs");
+  async function loadFixture(name) {
+    const candidates = [
+      "tests/fixtures/" + name,
+      new URL("./fixtures/" + name, import.meta.url).pathname
+    ];
+    for (const c of candidates) {
+      try {
+        return parseLockfile(readFileSync(c, "utf8"));
+      } catch (_) {}
+    }
+    throw new Error("fixture not found: " + name);
+  }
+
+  const fixV1 = await loadFixture("lockfile-v1.json");
+  equal(fixV1.lockfileVersion, 1, "fixture v1 version");
+  const prefV1 = preferredVersionsFromLockfile(fixV1);
+  equal(prefV1.get("is-array"), "1.0.1", "fixture v1 is-array");
+  equal(prefV1.get("left-pad"), "1.2.0", "fixture v1 nested left-pad");
+  equal(prefV1.get("ms"), "2.1.3", "fixture v1 ms");
+
+  const fixV2 = await loadFixture("lockfile-v2.json");
+  equal(fixV2.lockfileVersion, 2, "fixture v2 version");
+  const prefV2 = preferredVersionsFromLockfile(fixV2);
+  equal(prefV2.get("left-pad"), "1.3.0", "fixture v2 left-pad from packages");
+  equal(prefV2.get("ms"), "2.1.3", "fixture v2 ms");
+
+  const fixV3 = await loadFixture("lockfile-v3-nested.json");
+  equal(fixV3.lockfileVersion, 3, "fixture v3 version");
+  const prefV3 = preferredVersionsFromLockfile(fixV3);
+  truth(prefV3.has("shared"), "fixture v3 has shared");
+  truth(prefV3.has("parent-a"), "fixture v3 has parent-a");
+  truth(fixV3.packages["node_modules/parent-b/node_modules/shared"].version === "2.0.0", "fixture v3 nested shared@2");
+
+  // ========== CLI arg parsing ==========
+  const { parseArgs } = await import("../src/cli.js");
+  const cliInstall = parseArgs(["install", "--dev", "--dir", "/tmp/proj"]);
+  equal(cliInstall.command, "install", "cli command");
+  truth(cliInstall.flags.dev, "cli --dev");
+  equal(cliInstall.flags.dir, "/tmp/proj", "cli --dir");
+  const cliInfo = parseArgs(["info", "left-pad", "^1.2.0"]);
+  equal(cliInfo.command, "info", "cli info");
+  equal(cliInfo.args[0], "left-pad", "cli info pkg");
+  equal(cliInfo.args[1], "^1.2.0", "cli info range");
+
 } catch (error) {
   console.log("FAIL after " + assertions + " assertions");
   if (failures.length) {
