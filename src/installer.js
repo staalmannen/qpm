@@ -6,10 +6,11 @@ import { resolveDependencies } from "./resolver.js";
 import { makeFetchPackument } from "./host.js";
 import { buildLockfile, stringifyLockfile, preferredVersionsFromLockfile, parseLockfile } from "./lockfile.js";
 import { verifyIntegrity, pickIntegrity, parseIntegrity } from "./integrity.js";
-import { normalizeManifest } from "./manifest.js";
+import { planPlacement } from "./placement.js";
 
 /**
  * Compute the node_modules path for a package name (supports scopes).
+ * Prefer planPlacement for multi-version installs.
  * @param {import('./host.js').Host} host
  * @param {string} rootDir
  * @param {string} name
@@ -23,7 +24,7 @@ export function packageInstallPath(host, rootDir, name) {
 }
 
 /**
- * Install resolved packages into rootDir/node_modules.
+ * Install resolved packages into rootDir using placement plan (nested on conflict).
  *
  * @param {import('./host.js').Host} host
  * @param {import('./resolver.js').ResolveResult} resolveResult
@@ -31,7 +32,7 @@ export function packageInstallPath(host, rootDir, name) {
  * @param {string} options.rootDir
  * @param {boolean} [options.skipExisting=false]
  * @param {(msg: string) => void} [options.log]
- * @returns {Promise<{installed: string[], skipped: string[]}>}
+ * @returns {Promise<{installed: string[], skipped: string[], placement: import('./placement.js').Placement[]}>}
  */
 export async function installResolved(host, resolveResult, options) {
   assertInstallerHost(host);
@@ -40,61 +41,76 @@ export async function installResolved(host, resolveResult, options) {
   const log = options.log || (() => {});
   const skipExisting = options.skipExisting === true;
 
-  // Prefer a single version per name (flat node_modules). First seen wins
-  // (resolver pushes parents before children when possible).
-  const byName = new Map();
+  const placement = planPlacement(resolveResult);
+  const byId = new Map();
   for (const pkg of resolveResult.packages) {
-    if (!byName.has(pkg.name)) byName.set(pkg.name, pkg);
+    byId.set(pkg.id, pkg);
   }
+
+  // Cache downloaded tarballs by id so nested copies of the same version
+  // do not re-download.
+  /** @type {Map<string, Uint8Array>} */
+  const tarballCache = new Map();
 
   const installed = [];
   const skipped = [];
 
-  for (const [name, pkg] of byName) {
-    const dest = packageInstallPath(host, rootDir, name);
+  for (const place of placement) {
+    const pkg = byId.get(place.id);
+    if (!pkg) throw new Error("Placement references unknown package " + place.id);
+
+    const dest = host.pathJoin(rootDir, ...place.relPath.split("/"));
     if (skipExisting && await host.exists(dest)) {
-      skipped.push(name + "@" + pkg.version);
+      skipped.push(place.relPath + " (" + place.id + ")");
       continue;
     }
     if (!pkg.tarball) {
       throw new Error("No tarball URL for " + pkg.id);
     }
 
-    log("download " + pkg.id);
-    const bytes = await fetchBytes(host, pkg.tarball);
-
-    const integrity = pkg.integrity || pkg.shasum;
-    if (integrity) {
-      log("verify  " + pkg.id);
-      const ok = await verifyIntegrity(host, bytes, integrity);
-      if (!ok) {
-        throw new Error("Integrity check failed for " + pkg.id + " (" + integrity.slice(0, 24) + "...)");
+    let bytes = tarballCache.get(pkg.id);
+    if (!bytes) {
+      log("download " + pkg.id);
+      bytes = await fetchBytes(host, pkg.tarball);
+      const integrity = pkg.integrity || pkg.shasum;
+      if (integrity) {
+        log("verify  " + pkg.id);
+        const ok = await verifyIntegrity(host, bytes, integrity);
+        if (!ok) {
+          throw new Error("Integrity check failed for " + pkg.id + " (" + integrity.slice(0, 24) + "...)");
+        }
+      } else {
+        log("warn    " + pkg.id + " has no integrity metadata");
       }
-    } else {
-      log("warn    " + pkg.id + " has no integrity metadata");
+      tarballCache.set(pkg.id, bytes);
     }
 
-    // Extract to a temp dir then rename into place for a slightly safer install.
-    const tmp = host.pathJoin(rootDir, "node_modules", ".qpm-tmp-" + name.replace("/", "__") + "-" + pkg.version);
+    const tmp = host.pathJoin(
+      rootDir,
+      "node_modules",
+      ".qpm-tmp-" + place.relPath.replace(/[\/\\]/g, "__")
+    );
     if (await host.exists(tmp)) await host.removeTree(tmp);
     await host.mkdirp(tmp);
 
-    log("extract " + pkg.id);
+    log("extract " + pkg.id + " -> " + place.relPath);
     await host.extractTarGz(bytes, tmp);
 
-    // If destination exists, replace it.
     if (await host.exists(dest)) await host.removeTree(dest);
-    // Ensure parent exists (scoped packages).
-    const parent = name.startsWith("@")
-      ? host.pathJoin(rootDir, "node_modules", name.split("/")[0])
-      : host.pathJoin(rootDir, "node_modules");
-    await host.mkdirp(parent);
+    // Ensure parent directory exists (scoped packages, nested paths).
+    const parentParts = place.relPath.split("/");
+    parentParts.pop();
+    if (parentParts.length) {
+      await host.mkdirp(host.pathJoin(rootDir, ...parentParts));
+    } else {
+      await host.mkdirp(host.pathJoin(rootDir, "node_modules"));
+    }
     await host.rename(tmp, dest);
 
-    installed.push(name + "@" + pkg.version);
+    installed.push(place.relPath + " (" + place.id + ")");
   }
 
-  return { installed, skipped };
+  return { installed, skipped, placement };
 }
 
 /**
@@ -143,7 +159,7 @@ export async function installProject(host, options) {
     log
   });
 
-  const lock = buildLockfile(manifest, resolved);
+  const lock = buildLockfile(manifest, resolved, null, result.placement);
   await host.writeText(lockPath, stringifyLockfile(lock));
   log("wrote package-lock.json");
 
@@ -151,6 +167,7 @@ export async function installProject(host, options) {
     resolved,
     installed: result.installed,
     skipped: result.skipped,
+    placement: result.placement,
     lock
   };
 }
