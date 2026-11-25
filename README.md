@@ -19,12 +19,30 @@ The initial target is QuickJS (including QuickTS builds) on Plan 9. qpm is
 
 ## Status
 
-Early prototype / design stage. The repository currently contains the
-runtime-independent core only. It can parse common npm semver ranges and select
-matching versions from registry metadata. It does not yet download or install
-packages.
+Early prototype. The runtime-independent core now includes:
 
-See [DESIGN.md](DESIGN.md) for architecture and roadmap.
+- npm-compatible semver subset with a growing conformance fixture suite (`semver.js`)
+- `package.json` normalization and dependency collection (`manifest.js`)
+- registry URL construction and packument version selection (`registry.js`)
+- dependency graph resolver that accepts a host-provided `fetchPackument` callback (`resolver.js`)
+- `package-lock.json` (v1/v2/v3) read helpers and v3 lockfile generation (`lockfile.js`)
+- host capability interface (`host.js`) and a Node.js development adapter (`host-node.js`)
+- registry client built on the host interface (`registry-client.js`)
+
+Download, integrity verification, and flat `node_modules` installation work
+through the host adapter (`installer.js`). There is still no full CLI surface
+and no nested dependency placement / workspaces.
+
+I/O stays behind the host adapter so the same core can run on Node (dev) or on
+QuickJS with a small POSIX/C layer (libcurl, zlib, etc.). See [DESIGN.md](DESIGN.md).
+
+### Development smoke tests (Node)
+
+```bash
+node --input-type=module -e 'import("./tests/run.js")'
+node scripts/info.mjs left-pad '^1.2.0'
+node scripts/install-demo.mjs
+```
 
 ## Quick start
 
