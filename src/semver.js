@@ -91,8 +91,10 @@ function testToken(version, raw) {
         : { major: target.major, minor: target.minor + 1, patch: 0, prerelease: [] };
     } else if (target.major > 0) {
       upper = { major: target.major + 1, minor: 0, patch: 0, prerelease: [] };
-    } else if (p.minor == null || target.minor > 0) {
+    } else if (p.minor == null) {
       upper = { major: 1, minor: 0, patch: 0, prerelease: [] };
+    } else if (target.minor > 0) {
+      upper = { major: 0, minor: target.minor + 1, patch: 0, prerelease: [] };
     } else if (p.patch == null) {
       upper = { major: 0, minor: 1, patch: 0, prerelease: [] };
     } else {
