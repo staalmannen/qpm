@@ -3,27 +3,39 @@
 ## 1. Purpose
 
 qpm is an npm-registry client and package installer for small JavaScript
-runtimes. Its first deployment target is QuickJS / QuickTS on Plan 9.
+runtimes. Its first deployment target is QuickJS / QuickTS on Plan 9, built
+against the Plan 9 APE (ANSI/POSIX Environment).
 
 The key design decision is to separate **package-management semantics** from
 **host capabilities**. npm is a registry ecosystem and package metadata format;
 Node.js is one runtime commonly used to execute package-manager tooling. qpm
 should speak the former without depending on the latter.
 
+APE is an especially useful first portability target: it provides a deliberately
+small POSIX environment. qpm should rely on a conservative POSIX baseline and
+avoid conveniences that exist only on particular Unix-like systems. The goal
+is for a successful APE build to be a strong portability check for other POSIX
+systems, while still testing those systems rather than assuming perfect
+compatibility.
+
 ## 2. Design principles
 
 1. **No Node dependency in the core.** No `node:` imports, `process`,
-   `Buffer`, `require`, or assumptions about POSIX paths.
-2. **Small portable core.** Manifest handling, semver, registry metadata
+   `Buffer`, `require`, or Node-specific runtime assumptions.
+2. **Portable JavaScript core.** Manifest handling, semver, registry metadata
    selection, dependency graph logic, and lockfile data are ordinary
    ECMAScript.
-3. **Host services are injected.** HTTP, filesystem, archive extraction,
-   hashing, and optional lifecycle execution are provided by a platform
-   adapter.
-4. **Install safely and deterministically.** Resolve first, record exact
+3. **Conservative POSIX native layer.** Native services are implemented in C
+   against a small POSIX interface available through Plan 9 APE and ordinary
+   POSIX systems.
+4. **Dependencies behind interfaces.** HTTP, compression, archive handling,
+   and cryptography are isolated behind C interfaces. Available libraries
+   such as libcurl and LibreSSL may be used without leaking their APIs into
+   the package-management core.
+5. **Install safely and deterministically.** Resolve first, record exact
    versions and integrity data, then install. Never execute package lifecycle
    scripts by default.
-5. **npm compatibility is incremental.** Support common package.json patterns
+6. **npm compatibility is incremental.** Support common package.json patterns
    first; do not promise full npm CLI compatibility.
 
 ## 3. Architecture
@@ -35,22 +47,27 @@ should speak the former without depending on the latter.
                             |
              +--------------+--------------+
              |                             |
-       Package core                  Host adapter
-       - package.json                - HTTP(S)
-       - semver                      - filesystem
-       - registry metadata           - mkdir / rename
-       - dependency graph            - tar/gzip extraction
-       - lockfile model              - SHA- integrity
+       Package core                  QuickJS bindings
+       - package.json                - native function bridge
+       - semver                             |
+       - registry metadata           Portable C support library
+       - dependency graph            - HTTP client interface
+       - lockfile model              - filesystem operations
+             |                       - gzip / tar extraction
+             |                       - integrity hashing
              |                             |
              +-------------+---------------+
                            |
-                     npm registry
-              registry.npmjs.org
+                 POSIX / Plan 9 APE
+                           |
+              npm registry and package files
 ```
 
-The core should be importable as ES modules and accept plain objects and
-callbacks. The adapter translates platform-specific errors into a small
-common error shape.
+The JavaScript core should be importable as ES modules and accept plain
+objects and callbacks. It must not call POSIX or C APIs directly. The QuickJS
+binding layer exposes a small, stable set of native operations to JavaScript.
+The C support library itself should not depend on QuickJS, so it can be tested
+independently and reused by another runtime or executable.
 
 ### Core modules
 
@@ -65,26 +82,117 @@ common error shape.
 - `installer.js` (next): download tarballs, verify integrity, extract, and
   write installation records.
 
-### Host adapter contract (proposed)
+### Native C layer
 
-The core should not import these functions directly. The CLI creates an
-adapter object and passes it to the installer.
+Suggested source layout:
 
-- `http.get(url, headers?) -> { status, headers, body }`
-- `fs.readText(path) -> string`
-- `fs.writeText(path, text)`
-- `fs.mkdir(path, recursive?)`
-- `fs.exists(path) -> boolean`
-- `fs.rename(from, to)`
-- `fs.remove(path, recursive?)`
-- `archive.extractTarGzip(bytes, destination, options)`
-- `crypto.verifyIntegrity(bytes, integrity)`
+```
+src/
+  js/
+    semver.js
+    manifest.js
+    registry.js
+    resolver.js
+    lockfile.js
+    installer.js
+  c/
+    include/
+      qpm_platform.h
+    common/
+      http.c
+      archive.c
+      integrity.c
+    posix/
+      filesystem.c
+      process.c
+    quickjs/
+      bindings.c
+```
 
-The body/byte representation must be agreed with each host adapter. A future
-C helper may provide HTTP, gzip/tar, and hashing on Plan 9, while keeping
-policy and resolution in JavaScript.
+The C library should expose qpm-oriented functions rather than exposing
+libcurl, LibreSSL, zlib, or platform-specific APIs to JavaScript. Keep the
+interface small and use explicit byte buffers and lengths.
 
-## 4. Registry protocol
+A preliminary interface could look like:
+
+```c
+/* qpm_platform.h */
+
+typedef struct QpmHttpResponse QpmHttpResponse;
+
+int qpm_http_get(const char *url,
+                 const char * const *headers,
+                 QpmHttpResponse *response);
+void qpm_http_response_free(QpmHttpResponse *response);
+
+int qpm_read_file(const char *path, void **data, size_t *length);
+int qpm_write_file(const char *path, const void *data, size_t length);
+int qpm_mkdirs(const char *path);
+int qpm_rename(const char *from, const char *to);
+int qpm_remove_tree(const char *path);
+
+int qpm_extract_tar_gz(const void *data, size_t length,
+                       const char *destination);
+int qpm_sha512(const void *data, size_t length,
+               unsigned char digest[64]);
+```
+
+This is an illustrative API, not yet a frozen ABI. Error reporting, ownership,
+large-file handling, streaming downloads, and cancellation should be specified
+before implementation. In particular, package tarballs should eventually be
+downloaded to a file or streamed rather than necessarily held entirely in
+memory.
+
+### POSIX portability baseline
+
+Treat Plan 9 APE as the portability floor and prefer standard interfaces:
+stdio / file descriptors, `open`, `read`, `write`, `close`, `stat`,
+`mkdir`, `rename`, `unlink`, directory traversal, and ordinary process
+interfaces only where needed.
+
+Avoid making the core C implementation depend on:
+- Linux-specific system calls or headers.
+- GNU-only libc extensions.
+- BSD-only interfaces.
+- pthreads or asynchronous I/O unless a demonstrated requirement emerges.
+- shell utilities for operations that can be implemented safely in-process.
+
+Use compile-time feature checks for optional facilities. Keep platform-specific
+code in small backend files rather than scattering `#ifdef` branches
+throughout the implementation. POSIX path handling belongs in the native
+filesystem adapter; the JavaScript package logic should not assume that every
+host uses the same path conventions.
+
+APE's minimal environment is a useful portability discipline, but POSIX
+systems differ in details and optional interfaces. The project should have
+build and test coverage on APE plus at least one conventional POSIX system
+before describing a release as broadly POSIX-portable.
+
+## 4. Native dependencies
+
+Use external libraries when they materially reduce implementation and
+maintenance risk, but keep them replaceable behind the C interface.
+
+| Dependency | Role | Policy |
+|---|---|---|
+| libc / APE | Base C and POSIX services | Required for the initial native build |
+| libcurl | HTTPS, redirects, headers, downloads | Preferred HTTP backend where available |
+| zlib | gzip decompression | Preferred compression dependency |
+| LibreSSL | Cryptographic digest support if needed | Optional backend; do not expose its API above C |
+| tar handling | npm tarball extraction | Small internal extractor or a suitable portable library |
+
+The exact dependency set should be confirmed against the libraries available
+in the target APE environment. Avoid depending on libcurl or LibreSSL merely
+because they are available: use the smallest reliable set that provides the
+required behavior. Conversely, there is no need to reject them on portability
+grounds when they are already ported and provide a robust implementation.
+
+npm package integrity commonly uses SHA-512 in Subresource Integrity form;
+older metadata may also contain SHA-1. The installer must support SHA-512 and
+should handle legacy integrity metadata deliberately. It must not silently
+accept a package when a supplied integrity value fails verification.
+
+## 5. Registry protocol
 
 The public npm registry exposes package metadata at:
 
@@ -102,7 +210,7 @@ support ETags / conditional requests.
 Treat registry metadata and package contents as untrusted input. Validate
 package names, versions, URLs, archive paths, and integrity fields.
 
-## 5. Resolution semantics
+## 6. Resolution semantics
 
 Resolution is separate from installation:
 
@@ -126,7 +234,7 @@ resolver should model a graph, not a flat map keyed only by package name.
 Installation layout can then use nested `node_modules`-style directories or
 an internal content-addressed store with links/stubs where supported.
 
-## 6. Installation layout
+## 7. Installation layout
 
 Two layouts are worth supporting:
 
@@ -150,21 +258,22 @@ or generated import map.
 Do not commit to the native layout until QuickJS module resolution and Plan 9
 filesystem conventions are settled. The initial core is layout-neutral.
 
-## 7. Security and reproducibility
+## 8. Security and reproducibility
 
 - Do not run `preinstall`, `install`, `postinstall`, or other lifecycle
   scripts by default.
 - Verify `dist.integrity` (normally Subresource Integrity syntax) before
   extraction.
-- Reject archive entries that escape the installation root.
-- Use HTTPS and validate redirects.
+- Reject archive entries that escape the installation root, including
+  traversal through symbolic links or hard links.
+- Use HTTPS and validate redirects and final download URLs.
 - Write to a temporary directory, then rename into place.
 - Record exact versions, resolved tarball URLs, and integrity values in the
   lockfile.
 - Never treat package metadata as trusted executable configuration.
 - Consider package provenance/signatures as a later enhancement.
 
-## 8. Roadmap
+## 9. Roadmap
 
 ### Phase 0 — portable core (started)
 
@@ -174,11 +283,15 @@ filesystem conventions are settled. The initial core is layout-neutral.
 - [x] Packument version selection
 - [ ] Expand semver conformance tests
 
-### Phase 1 — read-only registry client
+### Phase 1 — native foundation and read-only registry client
 
-- [ ] HTTP adapter for QuickJS/Plan 9
+- [ ] Define and implement the small C platform interface
+- [ ] Build the C support library against Plan 9 APE
+- [ ] Add QuickJS bindings for the native interface
+- [ ] Implement libcurl HTTP backend (or the smallest suitable APE backend)
 - [ ] Fetch packuments and cache metadata
 - [ ] Human-readable `qpm info` / `qpm view`
+- [ ] Build/test on a second POSIX system to catch APE-specific assumptions
 
 ### Phase 2 — deterministic installation
 
@@ -203,7 +316,7 @@ filesystem conventions are settled. The initial core is layout-neutral.
   core; it belongs to the JavaScript runtime / host layer.
 - [ ] Optional lifecycle scripts, sandboxed and disabled by default
 
-## 9. Non-goals for the first release
+## 10. Non-goals for the first release
 
 - Reimplementing npm's entire CLI.
 - Running arbitrary Node.js programs.
@@ -212,15 +325,18 @@ filesystem conventions are settled. The initial core is layout-neutral.
   Node APIs, native addons, browser APIs, or unsupported syntax.
 - Running install scripts automatically.
 
-## 10. Open design questions
+## 11. Open design questions
 
 1. Should qpm default to `node_modules`, or to a Plan 9-native package store?
 2. What HTTP and byte-array APIs does the QuickJS Plan 9 port expose?
-3. Is a small C archive/hash helper acceptable, with the package policy kept
-   in JavaScript?
-4. Which QuickJS module-resolution behavior should qpm target?
-5. Should qpm use its own lockfile initially, or prioritize package-lock.json
-   compatibility from the start?
+3. Which C dependencies are actually present in the target APE environment,
+   and which should remain optional?
+4. Should downloads be streamed directly to temporary files through the C
+   interface, rather than buffered in JavaScript?
+5. Which QuickJS module-resolution behavior should qpm target?
+6. Should qpm use its own lockfile initially, or prioritize
+   package-lock.json compatibility from the start?
 
-The recommended order is to finish the portable core and host adapter
-contracts before choosing a final installation layout.
+The recommended order is to establish the conservative POSIX C interface,
+implement and test it on Plan 9 APE, and finish the portable JavaScript core
+before choosing a final installation layout.
