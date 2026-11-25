@@ -39,10 +39,17 @@ export function preferredVersionsFromLockfile(lock) {
       if (key === "") continue;
       const entry = lock.packages[key];
       if (!entry || typeof entry !== "object") continue;
+      // key is typically "node_modules/foo" or "node_modules/@scope/bar"
+      const name = key.replace(/^node_modules\//, "").replace(/\/node_modules\//g, "/");
+      // For nested installs the last path segment(s) form the package name.
+      // Prefer the explicit "name" field when present.
+      const pkgName = typeof entry.name === "string" ? entry.name : name.split("/").filter(Boolean).slice(-2).join("/").replace(/^@/, "@");
+      // Simpler: use entry.name if available, else derive from path.
       let resolvedName = entry.name;
       if (!resolvedName) {
         if (key.startsWith("node_modules/")) {
           const rest = key.slice("node_modules/".length);
+          // Handle scoped: node_modules/@scope/name or nested node_modules
           const parts = rest.split("/node_modules/").pop().split("/");
           if (parts[0].startsWith("@") && parts.length >= 2) {
             resolvedName = parts[0] + "/" + parts[1];
@@ -80,9 +87,10 @@ export function preferredVersionsFromLockfile(lock) {
  * @param {object} rootManifest  normalized or raw root package.json
  * @param {import('./resolver.js').ResolveResult} resolveResult
  * @param {object} [existing]    previous lockfile to preserve unknown fields from
+ * @param {import('./placement.js').Placement[]} [placement]  optional install paths
  * @returns {object}
  */
-export function buildLockfile(rootManifest, resolveResult, existing) {
+export function buildLockfile(rootManifest, resolveResult, existing, placement) {
   const root = typeof rootManifest === "string" ? JSON.parse(rootManifest) : (rootManifest || {});
   const name = root.name || (resolveResult.rootId && resolveResult.rootId.split("@")[0]) || "";
   const version = root.version || "0.0.0";
@@ -95,6 +103,7 @@ export function buildLockfile(rootManifest, resolveResult, existing) {
     }
   };
 
+  // Root dependency ranges
   const rootDeps = root.dependencies || {};
   const rootDev = root.devDependencies || {};
   const rootOpt = root.optionalDependencies || {};
@@ -104,24 +113,45 @@ export function buildLockfile(rootManifest, resolveResult, existing) {
   if (Object.keys(rootOpt).length) packages[""].optionalDependencies = { ...rootOpt };
   if (Object.keys(rootPeer).length) packages[""].peerDependencies = { ...rootPeer };
 
-  const seenNames = new Map();
+  const byId = new Map();
   for (const pkg of resolveResult.packages) {
-    if (!seenNames.has(pkg.name)) {
-      seenNames.set(pkg.name, pkg);
-    }
+    byId.set(pkg.id, pkg);
   }
 
-  for (const [pkgName, pkg] of seenNames) {
-    const key = "node_modules/" + pkgName;
-    const entry = {
-      version: pkg.version,
-      resolved: pkg.tarball || undefined,
-      integrity: pkg.integrity || undefined
-    };
-    if (Object.keys(pkg.dependencies).length) {
-      entry.dependencies = { ...pkg.dependencies };
+  if (placement && placement.length) {
+    for (const place of placement) {
+      const pkg = byId.get(place.id);
+      if (!pkg) continue;
+      const key = place.relPath;
+      const entry = {
+        name: pkg.name,
+        version: pkg.version,
+        resolved: pkg.tarball || undefined,
+        integrity: pkg.integrity || undefined
+      };
+      if (Object.keys(pkg.dependencies).length) {
+        entry.dependencies = { ...pkg.dependencies };
+      }
+      packages[key] = entry;
     }
-    packages[key] = entry;
+  } else {
+    // Flat fallback: one entry per name (first wins).
+    const seenNames = new Map();
+    for (const pkg of resolveResult.packages) {
+      if (!seenNames.has(pkg.name)) seenNames.set(pkg.name, pkg);
+    }
+    for (const [pkgName, pkg] of seenNames) {
+      const key = "node_modules/" + pkgName;
+      const entry = {
+        version: pkg.version,
+        resolved: pkg.tarball || undefined,
+        integrity: pkg.integrity || undefined
+      };
+      if (Object.keys(pkg.dependencies).length) {
+        entry.dependencies = { ...pkg.dependencies };
+      }
+      packages[key] = entry;
+    }
   }
 
   const lock = {
@@ -133,9 +163,7 @@ export function buildLockfile(rootManifest, resolveResult, existing) {
   };
 
   if (existing && typeof existing === "object") {
-    if (existing.dependencies && !lock.dependencies) {
-      // keep v1-style tree only if we didn't already have packages; we always have packages.
-    }
+    // Reserved for preserving unknown fields in a later pass.
   }
 
   return lock;
