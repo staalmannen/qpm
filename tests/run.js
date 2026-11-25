@@ -16,6 +16,7 @@ equal(compareVersions("1.0.0-alpha", "1.0.0"), -1, "prerelease ordering");
 truth(satisfies("1.4.2", "^1.2.0"), "caret range");
 truth(!satisfies("2.0.0", "^1.2.0"), "caret upper bound");
 truth(satisfies("0.2.4", "^0.2.3"), "zero-major caret");
+truth(!satisfies("0.3.0", "^0.2.3"), "zero-major caret upper bound");
 truth(satisfies("1.3.0", "~1.2"), "tilde upper range");
 truth(satisfies("1.2.9", "1.2.x"), "wildcard patch");
 truth(satisfies("2.0.0", ">=1.0.0 <3.0.0"), "comparator set");
