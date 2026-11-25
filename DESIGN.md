@@ -359,17 +359,17 @@ compatibility empirically with a test corpus of real packages.
 ### Phase 2 — npm-compatible installation foundation
 
 - [x] Implement npm-compatible `package-lock.json` reading/writing (v3 emit; v1/v2/v3 read)
-- [ ] Add lockfile fixtures from multiple npm lockfile versions
+- [x] Add lockfile fixtures from multiple npm lockfile versions (v1/v2/v3)
 - [ ] Implement npm-compatible semver behavior (full)
 - [x] Dependency graph resolver and basic peer/optional handling hooks
 - [x] Tarball download and integrity verification (SRI + legacy shasum)
 - [x] Safe tar/gzip extraction (host.extractTarGz; Node ustar impl, path-traversal checks)
-- [x] Flat npm-compatible `node_modules` placement (scoped packages; nested later)
+- [x] npm-compatible `node_modules` placement (hoist + nest on version conflict)
 - [x] Install + lockfile write path (`installProject` / `installResolved`)
 
 ### Phase 3 — package-manager workflows
 
-- [ ] `qpm install`, `qpm add`, `qpm remove`
+- [x] Thin CLI: `qpm install`, `qpm info`, `qpm resolve` (add/remove later)
 - [ ] Scoped packages, aliases, optional/dev/peer dependencies
 - [ ] npm-compatible configuration and common CLI behavior
 - [ ] Offline cache
