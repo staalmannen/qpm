@@ -69,7 +69,7 @@ Run the test file with a compatible JavaScript shell that supports ES modules.
 The test suite is intentionally dependency-free:
 
 ```sh
-qjs --std --module tests/run.js
+qjs --std -m tests/run.js
 ```
 
 The exact invocation may vary with how QuickJS is built and how module loading
