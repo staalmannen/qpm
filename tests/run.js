@@ -24,7 +24,7 @@ function truth(value, label) {
 }
 function falsy(value, label) {
   assertions++;
-  if (value)) failures.push(label + ": expected false");
+  if (value) failures.push(label + ": expected false");
 }
 
 try {
