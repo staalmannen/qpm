@@ -2,15 +2,23 @@ import { compareVersions, satisfies, maxSatisfying } from "../src/semver.js";
 import { normalizeManifest, validatePackageName } from "../src/manifest.js";
 import { packageMetadataURL, selectVersion } from "../src/registry.js";
 
+let assertions = 0;
+
+console.log("qpm core tests");
+console.log("---------------");
+
 function equal(actual, expected, label) {
+  assertions++;
   if (actual !== expected) {
     throw new Error(label + ": expected " + String(expected) + ", got " + String(actual));
   }
 }
 function truth(value, label) {
+  assertions++;
   if (!value) throw new Error(label + ": expected true");
 }
 
+try {
 equal(compareVersions("1.2.0", "1.1.9"), 1, "version ordering");
 equal(compareVersions("1.0.0-alpha", "1.0.0"), -1, "prerelease ordering");
 truth(satisfies("1.4.2", "^1.2.0"), "caret range");
@@ -41,4 +49,9 @@ const packument = {
 equal(selectVersion(packument, "^1.0.0"), "1.4.0", "registry version selection");
 equal(selectVersion(packument, "latest"), "2.0.0", "latest dist-tag");
 
-console.log("qpm core tests: ok");
+} catch (error) {
+  console.log("FAIL after " + assertions + " assertions");
+  throw error;
+}
+
+console.log("All tests passed (" + assertions + " assertions).");
