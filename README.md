@@ -29,9 +29,17 @@ Early prototype. The runtime-independent core now includes:
 - host capability interface (`host.js`) and a Node.js development adapter (`host-node.js`)
 - registry client built on the host interface (`registry-client.js`)
 
-Download, integrity verification, and flat `node_modules` installation work
-through the host adapter (`installer.js`). There is still no full CLI surface
-and no nested dependency placement / workspaces.
+Download, integrity verification, and `node_modules` installation work through
+the host adapter (`installer.js`), including **nested placement** when ranges
+require multiple versions of the same package (`placement.js`).
+
+A thin Node CLI is available:
+
+```bash
+node bin/qpm.mjs install
+node bin/qpm.mjs info left-pad '^1.2.0'
+node bin/qpm.mjs resolve
+```
 
 I/O stays behind the host adapter so the same core can run on Node (dev) or on
 QuickJS with a small POSIX/C layer (libcurl, zlib, etc.). See [DESIGN.md](DESIGN.md).
@@ -40,7 +48,8 @@ QuickJS with a small POSIX/C layer (libcurl, zlib, etc.). See [DESIGN.md](DESIGN
 
 ```bash
 node --input-type=module -e 'import("./tests/run.js")'
-node scripts/info.mjs left-pad '^1.2.0'
+node bin/qpm.mjs info left-pad '^1.2.0'
+node bin/qpm.mjs install --dir /path/to/project
 node scripts/install-demo.mjs
 ```
 
