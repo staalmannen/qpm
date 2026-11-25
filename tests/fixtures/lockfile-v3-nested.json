@@ -1,0 +1,38 @@
+{
+  "name": "fixture-app",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "fixture-app",
+      "version": "1.0.0",
+      "dependencies": {
+        "parent-a": "1.0.0",
+        "parent-b": "1.0.0"
+      }
+    },
+    "node_modules/parent-a": {
+      "name": "parent-a",
+      "version": "1.0.0",
+      "dependencies": {
+        "shared": "1.0.0"
+      }
+    },
+    "node_modules/parent-b": {
+      "name": "parent-b",
+      "version": "1.0.0",
+      "dependencies": {
+        "shared": "2.0.0"
+      }
+    },
+    "node_modules/shared": {
+      "name": "shared",
+      "version": "1.0.0"
+    },
+    "node_modules/parent-b/node_modules/shared": {
+      "name": "shared",
+      "version": "2.0.0"
+    }
+  }
+}
