@@ -35,3 +35,20 @@ export function getVersionMetadata(packument, versionOrRange = "latest") {
   }
   return { version, metadata };
 }
+
+/**
+ * Extract dist information (tarball URL + integrity) from version metadata.
+ * @param {object} metadata - packument.versions[version]
+ * @returns {{tarball: string|null, integrity: string|null, shasum: string|null}}
+ */
+export function getDistInfo(metadata) {
+  const dist = metadata && metadata.dist;
+  if (!dist || typeof dist !== "object") {
+    return { tarball: null, integrity: null, shasum: null };
+  }
+  return {
+    tarball: typeof dist.tarball === "string" ? dist.tarball : null,
+    integrity: typeof dist.integrity === "string" ? dist.integrity : null,
+    shasum: typeof dist.shasum === "string" ? dist.shasum : null
+  };
+}
