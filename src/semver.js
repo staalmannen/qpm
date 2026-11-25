@@ -37,7 +37,7 @@ export function compareVersions(a, b) {
 
 function partialVersion(token) {
   const t = token.replace(/^[v=]/, "");
-  const m = /^(\d+|x|\*)?(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?(?:-([0-9A-Za-z.-]+))?$/.exec(t);
+  const m = /^(\d+|x|X|\*)?(?:\.(\d+|x|X|\*))?(?:\.(\d+|x|X|\*))?(?:-([0-9A-Za-z.-]+))?$/.exec(t);
   if (!m) return null;
   const parts = [m[1], m[2], m[3]];
   let wildcard = false;
@@ -51,12 +51,20 @@ function partialVersion(token) {
       nums.push(+p);
     }
   }
-  return { major: nums[0], minor: nums[1], patch: nums[2], prerelease: m[4] ? m[4].split(".") : [], precision: parts.filter(p => p != null && !/^[x*]$/i.test(p)).length, wildcard };
+  return {
+    major: nums[0],
+    minor: nums[1],
+    patch: nums[2],
+    prerelease: m[4] ? m[4].split(".") : [],
+    precision: parts.filter(p => p != null && !/^[x*]$/i.test(p)).length,
+    wildcard
+  };
 }
 
 function floorOf(p) {
   return { major: p.major || 0, minor: p.minor || 0, patch: p.patch || 0, prerelease: p.prerelease || [] };
 }
+
 function upperForPartial(p) {
   if (p.major == null) return null;
   if (p.minor == null) return { major: p.major + 1, minor: 0, patch: 0, prerelease: [] };
@@ -84,6 +92,15 @@ function testToken(version, raw) {
 
   if (op === "^" || op === "~") {
     if (compareVersions(version, target) < 0) return false;
+    // Prerelease versions only match a caret/tilde range when they share the
+    // same [major, minor, patch] as the range target (npm/node-semver rule).
+    if (version.prerelease.length && target.prerelease.length) {
+      if (version.major !== target.major ||
+          version.minor !== target.minor ||
+          version.patch !== target.patch) {
+        return false;
+      }
+    }
     let upper;
     if (op === "~") {
       upper = p.minor == null
@@ -148,4 +165,8 @@ export function maxSatisfying(versionStrings, range) {
     if (best == null || compareVersions(s, best) > 0) best = s;
   }
   return best;
+}
+
+export function parseVersionSafe(input) {
+  return parseVersion(input);
 }
