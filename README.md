@@ -72,5 +72,16 @@ The test suite is intentionally dependency-free:
 qjs --std -m tests/run.js
 ```
 
+A successful run prints a summary similar to:
+
+```text
+qpm core tests
+---------------
+All tests passed (18 assertions).
+```
+
+If an assertion fails, the runner prints a failure count and re-throws the
+error so the JavaScript shell reports the failure (and exits unsuccessfully).
+
 The exact invocation may vary with how QuickJS is built and how module loading
 is configured.
