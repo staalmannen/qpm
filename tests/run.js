@@ -214,7 +214,7 @@ try {
 
   // ========== integrity + path safety ==========
   const { parseIntegrity, toHex, fromHex, toBase64, fromBase64 } = await import("../src/integrity.js");
-  const { safeTarPath } = await import("../src/tar.js");
+  const { safeTarPath, parseTar } = await import("../src/tar-core.js");
 
   equal(toHex(fromHex("aabbccdd")), "aabbccdd", "hex roundtrip");
   equal(toHex(fromBase64(toBase64(new Uint8Array([0, 1, 2, 3])))), "00010203", "base64 roundtrip");
@@ -229,6 +229,77 @@ try {
   equal(safeTarPath("../etc/passwd"), null, "reject tar traversal");
   equal(safeTarPath("/etc/passwd"), null, "reject absolute tar path");
   equal(safeTarPath("foo/../../etc"), null, "reject nested traversal");
+
+  // ========== UTF-8 (QuickJS has no TextEncoder/TextDecoder) ==========
+  const { encodeUtf8Pure, decodeUtf8Pure, encodeUtf8, decodeUtf8 } = await import("../src/utf8.js");
+  const sample = "a\u00e9\u20ac\ud83d\ude00z"; // 1, 2, 3 and 4 byte forms
+  equal(toHex(encodeUtf8Pure(sample)), "61c3a9e282acf09f9880" + "7a", "utf8 encode all widths");
+  equal(decodeUtf8Pure(encodeUtf8Pure(sample)), sample, "utf8 roundtrip");
+  equal(decodeUtf8(encodeUtf8(sample)), sample, "utf8 roundtrip (engine default)");
+  equal(decodeUtf8Pure(new Uint8Array([0x61, 0xc3])), "a\ufffd", "utf8 truncated sequence -> U+FFFD");
+  equal(decodeUtf8Pure(new Uint8Array([0xc0, 0x80])), "\ufffd\ufffd", "utf8 overlong rejected");
+  equal(decodeUtf8Pure(new Uint8Array([0xed, 0xa0, 0x80])), "\ufffd\ufffd\ufffd", "utf8 encoded surrogate rejected");
+
+  // ========== tar parsing (pure; gunzip is the host's job) ==========
+  function tarHeader(name, size, type, prefix) {
+    const h = new Uint8Array(512);
+    const put = (str, at) => { const b = encodeUtf8Pure(str); h.set(b, at); };
+    put(name, 0);
+    put("0000644", 100);
+    put(size.toString(8).padStart(11, "0"), 124);
+    h[156] = type.charCodeAt(0);
+    put("ustar", 257);
+    h[263] = 0x30; h[264] = 0x30; // version "00"
+    if (prefix) put(prefix, 345);
+    for (let i = 148; i < 156; i++) h[i] = 0x20;
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += h[i];
+    put(sum.toString(8).padStart(6, "0"), 148);
+    h[154] = 0;
+    return h;
+  }
+  function tarArchive(members) {
+    const blocks = [];
+    for (const m of members) {
+      const data = m.data ? encodeUtf8Pure(m.data) : new Uint8Array(0);
+      blocks.push(tarHeader(m.name, data.length, m.type || "0", m.prefix));
+      const padded = new Uint8Array(Math.ceil(data.length / 512) * 512);
+      padded.set(data);
+      blocks.push(padded);
+    }
+    blocks.push(new Uint8Array(1024));
+    let n = 0;
+    for (const b of blocks) n += b.length;
+    const out = new Uint8Array(n);
+    let at = 0;
+    for (const b of blocks) { out.set(b, at); at += b.length; }
+    return out;
+  }
+  const bigText = "x".repeat(600); // crosses a 512-byte block boundary
+  const archive = tarArchive([
+    { name: "package/", type: "5" },
+    { name: "package/package.json", data: "{\"name\":\"t\"}" },
+    { name: "package/lib/big.txt", data: bigText },
+    { name: "package/../evil.js", data: "nope" },
+    { name: "package/link", type: "2" },
+    { name: "deep.js", prefix: "package/a/b", data: "deep" },
+    { name: "package/caf\u00e9.txt", data: "\u20ac" }
+  ]);
+  const ents = parseTar(archive);
+  const byPath = new Map(ents.map((e) => [e.path, e]));
+  equal(ents.length, 4, "tar: unsafe, symlink and package/ dir dropped");
+  equal(decodeUtf8Pure(byPath.get("package.json").data), "{\"name\":\"t\"}", "tar: file content");
+  equal(byPath.get("lib/big.txt").data.length, 600, "tar: multi-block file length");
+  equal(decodeUtf8Pure(byPath.get("a/b/deep.js").data), "deep", "tar: ustar prefix joined and stripped");
+  truth(byPath.has("caf\u00e9.txt"), "tar: UTF-8 file name");
+  falsy(byPath.has("evil.js") || byPath.has("../evil.js"), "tar: traversal entry dropped");
+  const unstripped = parseTar(archive, { stripPackagePrefix: false });
+  truth(unstripped.some((e) => e.path === "package/package.json"), "tar: prefix kept when asked");
+  let truncated = false;
+  // blocks: dir hdr 0, package.json hdr 512 + data 1024, big.txt hdr 1536,
+  // big.txt data from 2048 -- cut inside that data
+  try { parseTar(archive.subarray(0, 2048 + 100)); } catch (_) { truncated = true; }
+  truth(truncated, "tar: truncated entry throws");
 
   // ========== placement (nested on version conflict) ==========
   const { planPlacement, nameToSegments, joinRel } = await import("../src/placement.js");
@@ -261,16 +332,31 @@ try {
   truth(nestedShared.some((p) => p.relPath.includes("node_modules/shared")), "nested path contains node_modules/shared");
 
   // ========== lockfile fixtures ==========
-  const { readFileSync } = await import("node:fs");
+  // Read through whichever file API the engine has: QuickJS's "std"
+  // module, else Node's fs. No URL class on QuickJS, so the fixture
+  // directory is worked out from import.meta.url by string handling.
+  async function readTextFile(file) {
+    try {
+      const std = await import("std");
+      const text = std.loadFile(file);
+      if (typeof text === "string") return text;
+    } catch (_) {}
+    try {
+      const fs = await import("node:fs");
+      return fs.readFileSync(file, "utf8");
+    } catch (_) {}
+    return null;
+  }
+  function fixtureDir() {
+    let u = String(import.meta.url || "");
+    if (u.startsWith("file://")) u = decodeURIComponent(u.slice(7));
+    const slash = u.lastIndexOf("/");
+    return (slash >= 0 ? u.slice(0, slash + 1) : "") + "fixtures/";
+  }
   async function loadFixture(name) {
-    const candidates = [
-      "tests/fixtures/" + name,
-      new URL("./fixtures/" + name, import.meta.url).pathname
-    ];
-    for (const c of candidates) {
-      try {
-        return parseLockfile(readFileSync(c, "utf8"));
-      } catch (_) {}
+    for (const c of ["tests/fixtures/" + name, fixtureDir() + name]) {
+      const text = await readTextFile(c);
+      if (text !== null) return parseLockfile(text);
     }
     throw new Error("fixture not found: " + name);
   }
@@ -296,7 +382,7 @@ try {
   truth(fixV3.packages["node_modules/parent-b/node_modules/shared"].version === "2.0.0", "fixture v3 nested shared@2");
 
   // ========== CLI arg parsing ==========
-  const { parseArgs } = await import("../src/cli.js");
+  const { parseArgs } = await import("../src/args.js");
   const cliInstall = parseArgs(["install", "--dev", "--dir", "/tmp/proj"]);
   equal(cliInstall.command, "install", "cli command");
   truth(cliInstall.flags.dev, "cli --dev");

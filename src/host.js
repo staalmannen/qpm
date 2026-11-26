@@ -11,6 +11,8 @@
 // benchmark, not a reason to introduce platform-specific APIs in the core
 // or in the adapter contract.
 
+import { decodeUtf8, encodeUtf8 } from "./utf8.js";
+
 /**
  * @typedef {object} HttpResponse
  * @property {number} status
@@ -100,7 +102,7 @@ export async function fetchJSON(host, url, options) {
   }
   const text = typeof res.body === "string"
     ? res.body
-    : new TextDecoder().decode(res.body);
+    : decodeUtf8(res.body);
   return JSON.parse(text);
 }
 
@@ -119,7 +121,7 @@ export async function fetchBytes(host, url) {
     throw new Error("HTTP " + res.status + " for " + url);
   }
   if (typeof res.body === "string") {
-    return new TextEncoder().encode(res.body);
+    return encodeUtf8(res.body);
   }
   return res.body instanceof Uint8Array ? res.body : new Uint8Array(res.body);
 }
