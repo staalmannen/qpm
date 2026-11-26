@@ -41,6 +41,20 @@ node bin/qpm.mjs info left-pad '^1.2.0'
 node bin/qpm.mjs resolve
 ```
 
+On QuickJS (including QuickTS on Plan 9 APE) the same commands run through
+`bin/qpm-qjs.js`, with a host adapter built only on QuickJS's `std` and `os`
+modules (`src/host-qjs.js`):
+
+```sh
+qjs --std -m bin/qpm-qjs.js info left-pad '^1.2.0'
+qjs --std -m bin/qpm-qjs.js resolve --dir /path/to/project
+```
+
+HTTP there is `std.urlGet`, which runs the `curl` command, so `curl` must be
+on `PATH` and able to reach `https://registry.npmjs.org`. `install` is not
+available on QuickJS yet: it needs SHA-512 and gunzip, which the QuickJS host
+does not provide, and it says so (`host adapter missing function: hash`).
+
 I/O stays behind the host adapter so the same core can run on Node (dev) or on
 QuickJS with a small POSIX/C layer (libcurl, zlib, etc.). See [DESIGN.md](DESIGN.md).
 

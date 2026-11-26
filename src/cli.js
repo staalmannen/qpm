@@ -1,7 +1,7 @@
-// Thin CLI entry for qpm (Node host). Portable core stays free of Node APIs;
-// this file is the development/runtime entry that wires host + commands.
+// qpm command dispatch. Engine-independent: the entry point chooses the
+// host adapter (bin/qpm.mjs passes the Node one, bin/qpm-qjs.js the
+// QuickJS one), so nothing here imports Node or QuickJS modules.
 
-import { createNodeHost } from "./host-node.js";
 import { createRegistryClient } from "./registry-client.js";
 import { installProject } from "./installer.js";
 import { resolveDependencies, flattenResolved } from "./resolver.js";
@@ -37,13 +37,17 @@ export { parseArgs };
  * @param {string[]} options.argv
  * @param {(msg: string) => void} [options.log]
  * @param {(msg: string) => void} [options.err]
- * @param {import('./host.js').Host} [options.host]
+ * @param {import('./host.js').Host} options.host
  * @returns {Promise<number>} exit code
  */
 export async function runCli(options) {
   const log = options.log || console.log;
-  const err = options.err || console.error;
-  const host = options.host || createNodeHost();
+  // QuickJS's console has log and nothing else, so console.error is not
+  // assumed; entry points pass their own err where they can.
+  const err = options.err ||
+    (typeof console.error === "function" ? console.error : console.log);
+  const host = options.host;
+  if (!host) throw new Error("runCli: options.host is required");
   let parsed;
   try {
     parsed = parseArgs(options.argv || []);
@@ -75,7 +79,10 @@ export async function runCli(options) {
     err(usage());
     return 2;
   } catch (e) {
-    err(e && e.stack ? e.stack : String(e));
+    // V8's stack starts with "Error: message"; QuickJS's is frames only.
+    const head = String(e);
+    const stack = e && e.stack ? String(e.stack) : "";
+    err(stack.startsWith(head) ? stack : stack ? head + "\n" + stack : head);
     return 1;
   }
 }
