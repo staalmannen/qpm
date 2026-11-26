@@ -104,8 +104,15 @@ A successful run prints a summary similar to:
 ```text
 qpm core tests
 ---------------
-All tests passed (18 assertions).
+All tests passed (180 assertions).
 ```
+
+The same file runs unchanged under Node
+(`node --input-type=module -e 'import("./tests/run.js")'`). Nothing it
+imports may use Node built-ins or `TextEncoder`/`TextDecoder`/`URL`, which
+QuickJS does not have: tar parsing is in `src/tar-core.js` (gunzip and the
+writes stay in the host), UTF-8 in `src/utf8.js`, and argument parsing in
+`src/args.js` so that testing it does not load the Node host.
 
 If an assertion fails, the runner prints a failure count and re-throws the
 error so the JavaScript shell reports the failure (and exits unsuccessfully).
